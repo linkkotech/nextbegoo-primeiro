@@ -1,0 +1,4 @@
+# NextBegoo Primeiro
+
+Projeto inicial.
+
