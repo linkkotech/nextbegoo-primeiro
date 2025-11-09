@@ -1,0 +1,382 @@
+// prisma/schema.prisma
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider          = "postgresql"
+  url               = env("DATABASE_URL")
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
+}
+
+enum UserType {
+  CONSUMER
+  MERCHANT
+  STAFF
+}
+
+enum ProfileType {
+  BUSINESS
+  PROFESSIONAL
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  EXPIRED
+  IN_GRACE
+  DUNNING
+  CANCELLED
+}
+
+enum BusinessModuleName {
+  DELIVERY
+  IMOVEIS
+  AGENDA
+  POS
+  CRM
+  VITRINE
+}
+
+enum CatalogItemType {
+  PRODUCT
+  SERVICE
+  BUNDLE
+  SUBSCRIPTION
+}
+
+enum AIStatus {
+  ACTIVE
+  PAUSED
+  OFFLINE
+  DEGRADED
+}
+
+enum LeadSource {
+  CHAT
+  CARD
+  FORM
+  REFERRAL
+  OTHER
+}
+
+enum LeadConversionStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  WON
+  LOST
+}
+
+enum ConversationStatus {
+  OPEN
+  WAITING
+  CLOSED
+  ARCHIVED
+}
+
+enum ComplianceStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  REVIEW
+}
+
+model User {
+  id             String          @id @default(uuid())
+  email          String          @unique
+  passwordHash   String?
+  userType       UserType        @default(CONSUMER)
+  displayName    String?
+  phoneNumber    String?
+  monetaWallet   MonetaWallet?
+  merchantsOwned Merchant[]      @relation("MerchantOwner")
+  merchantMemberships MerchantMember[]
+  conversations  Conversation[]  @relation("ConversationConsumer")
+  aiUsageLogs    AI_Usage_Log[]  @relation("UsageTriggeredBy")
+  accounts       Account[]
+  sessions       Session[]
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+}
+
+model Merchant {
+  id                    String             @id @default(uuid())
+  mainUserId            String
+  mainUser              User               @relation("MerchantOwner", fields: [mainUserId], references: [id])
+  companyName           String
+  slug                  String             @unique
+  legalDocument         String?
+  supportEmail          String?
+  supportPhone          String?
+  timezone              String             @default("America/Sao_Paulo")
+  isEligibleForSearch   Boolean            @default(false)
+  complianceStatus      ComplianceStatus   @default(PENDING)
+  complianceMetadata    Json?
+  workspaceConfig       Json?
+  profiles              Profile[]
+  subscriptions         Subscription[]
+  businessModules       BusinessModule[]
+  catalogItems          CatalogItem[]
+  leads                 Lead[]
+  conversations         Conversation[]
+  aiAssistants          AI_Assistant[]
+  aiUsageLogs           AI_Usage_Log[]
+  members               MerchantMember[]
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+
+  @@index([slug])
+  @@index([complianceStatus])
+}
+
+model MerchantMember {
+  id          String   @id @default(uuid())
+  merchantId  String
+  userId      String
+  role        String   @default("member")
+  invitedById String?
+  invitedBy   User?    @relation("MemberInvitedBy", fields: [invitedById], references: [id])
+  merchant    Merchant @relation(fields: [merchantId], references: [id])
+  user        User     @relation(fields: [userId], references: [id])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([merchantId, userId])
+}
+
+model Profile {
+  id                String       @id @default(uuid())
+  merchantId        String
+  merchant          Merchant     @relation(fields: [merchantId], references: [id])
+  profileType       ProfileType  @default(BUSINESS)
+  displayName       String
+  bioLink           String?
+  description       String?
+  avatarUrl         String?
+  coverImageUrl     String?
+  addressLine1      String?
+  addressLine2      String?
+  city              String?
+  state             String?
+  postalCode        String?
+  country           String?      @default("BR")
+  workingHoursJson  Json?
+  isPrimary         Boolean      @default(true)
+  metadata          Json?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  @@index([merchantId])
+  @@unique([merchantId, isPrimary], map: "unique_primary_profile_per_merchant")
+}
+
+model Plan {
+  id              String          @id @default(uuid())
+  name            String
+  description     String?
+  currency        String          @default("BRL")
+  priceMonthly    Decimal?        @db.Decimal(10, 2)
+  priceYearly     Decimal?        @db.Decimal(10, 2)
+  stripeProductId String?
+  stripePriceId   String?
+  features        Json?
+  isActive        Boolean         @default(true)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+}
+
+model Subscription {
+  id                  String             @id @default(uuid())
+  merchantId          String
+  planId              String
+  merchant            Merchant           @relation(fields: [merchantId], references: [id])
+  plan                Plan               @relation(fields: [planId], references: [id])
+  status              SubscriptionStatus @default(ACTIVE)
+  currentPeriodStart  DateTime?
+  currentPeriodEnd    DateTime?
+  cancelAtPeriodEnd   Boolean            @default(false)
+  latestInvoiceId     String?
+  stripeSubscriptionId String?
+  isAiAddonActive     Boolean            @default(false)
+  metadata            Json?
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  @@index([merchantId, status])
+}
+
+model BusinessModule {
+  id          String             @id @default(uuid())
+  merchantId  String
+  merchant    Merchant           @relation(fields: [merchantId], references: [id])
+  moduleName  BusinessModuleName
+  isActive    Boolean            @default(false)
+  settings    Json?
+  activatedAt DateTime?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  @@unique([merchantId, moduleName])
+}
+
+model CatalogItem {
+  id             String           @id @default(uuid())
+  merchantId     String
+  merchant       Merchant         @relation(fields: [merchantId], references: [id])
+  itemType       CatalogItemType  @default(PRODUCT)
+  title          String
+  description    String?
+  priceReal      Decimal          @db.Decimal(12, 2)
+  stockQuantity  Int?             @default(0)
+  isVisible      Boolean          @default(true)
+  sku            String?
+  tags           String[]
+  mediaUrls      String[]
+  metadata       Json?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  @@index([merchantId, itemType])
+  @@index([merchantId, isVisible])
+}
+
+model AI_Assistant {
+  id                   String      @id @default(uuid())
+  merchantId           String
+  merchant             Merchant    @relation(fields: [merchantId], references: [id])
+  name                 String
+  status               AIStatus    @default(PAUSED)
+  promptConfig         String
+  promptVersion        Int         @default(1)
+  ragConfigRef         String?
+  defaultModel         String      @default("gpt-4.1-mini")
+  usesOwnApiKey        Boolean     @default(false)
+  apiKeySecretId       String?
+  lastSyncedCatalogAt  DateTime?
+  guardrailsConfig     Json?
+  createdAt            DateTime    @default(now())
+  updatedAt            DateTime    @updatedAt
+
+  @@index([merchantId, status])
+}
+
+model AI_Usage_Log {
+  id               String       @id @default(uuid())
+  merchantId       String
+  merchant         Merchant     @relation(fields: [merchantId], references: [id])
+  aiAssistantId    String?
+  aiAssistant      AI_Assistant? @relation(fields: [aiAssistantId], references: [id])
+  triggeredByUserId String?
+  triggeredByUser  User?        @relation("UsageTriggeredBy", fields: [triggeredByUserId], references: [id])
+  model            String
+  inputTokens      Int          @default(0)
+  outputTokens     Int          @default(0)
+  costEstimateReal Decimal?     @db.Decimal(12, 4)
+  metadata         Json?
+  createdAt        DateTime     @default(now())
+
+  @@index([merchantId])
+  @@index([aiAssistantId])
+}
+
+model MonetaWallet {
+  id                 String    @id @default(uuid())
+  userId             String    @unique
+  user               User      @relation(fields: [userId], references: [id])
+  balanceReal        Decimal   @default(0) @db.Decimal(12, 2)
+  balanceMoneta      Decimal   @default(0) @db.Decimal(12, 2)
+  lastConversionRate Decimal   @default(1.30) @db.Decimal(6, 4)
+  updatedAt          DateTime  @updatedAt
+  createdAt          DateTime  @default(now())
+}
+
+model Lead {
+  id               String               @id @default(uuid())
+  merchantId       String
+  merchant         Merchant             @relation(fields: [merchantId], references: [id])
+  contactName      String
+  contactEmail     String?
+  contactPhone     String?
+  sourceOrigin     LeadSource           @default(CHAT)
+  conversionStatus LeadConversionStatus @default(NEW)
+  notes            String?
+  metadata         Json?
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+
+  @@index([merchantId, conversionStatus])
+}
+
+model Conversation {
+  id                 String             @id @default(uuid())
+  merchantId         String
+  merchant           Merchant           @relation(fields: [merchantId], references: [id])
+  consumerId         String?
+  consumer           User?              @relation("ConversationConsumer", fields: [consumerId], references: [id])
+  startedByUserId    String?
+  startedByUser      User?              @relation("ConversationStartedBy", fields: [startedByUserId], references: [id])
+  startTime          DateTime           @default(now())
+  status             ConversationStatus @default(OPEN)
+  translationEnabled Boolean            @default(false)
+  languageCode       String?            @default("pt-BR")
+  lastMessageAt      DateTime?
+  metadata           Json?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  @@index([merchantId, status])
+}
+
+model CheckoutIntent {
+  id                String    @id @default(uuid())
+  merchantId        String
+  merchant          Merchant  @relation(fields: [merchantId], references: [id])
+  amountReal        Decimal   @db.Decimal(12, 2)
+  serviceFeeReal    Decimal   @db.Decimal(12, 2)
+  cashbackReal      Decimal   @db.Decimal(12, 2)
+  stripePaymentIntentId String?
+  status            String    @default("pending")
+  metadata          Json?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([merchantId, status])
+}
+
+model Account {
+  id                String  @id @default(uuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id])
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
